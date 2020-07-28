@@ -16,11 +16,12 @@ CHARGE_HOURS = 4
 AWAKE_UNTIL = time.fromisoformat("09:30")
 
 # What price to allow charging at regardless of how many hours we need?
-ALLOW_CHARGE_PRICE = 1.6
+ALLOW_CHARGE_PRICE = 1.4
 
-session = requests.Session()
+# Full URL to your OpenEVSE RAPI API call
+RAPI_API_URL = "http://openevse-xxxx/r"
 
-def fetch_for_date(when):
+def fetch_for_date(session, when):
     # curl 'https://hourlypricing.comed.com/rrtp/ServletFeed?type=daynexttoday&date=20200726'
     url = "https://hourlypricing.comed.com/rrtp/ServletFeed"
     params = {"type": "daynexttoday", "date": when.strftime("%Y%m%d")}
@@ -28,27 +29,29 @@ def fetch_for_date(when):
     txt = req.text
 
     # format: "[[Date.UTC(2020,6,18,0,0,0), 1.8], ...]"
+    # note that they aren't UTC at all, they are America/Chicago TZ
     date_re = re.compile(
         r"\[Date\.UTC\((?P<y>\d+),(?P<m>\d+),(?P<d>\d+),(?P<h>\d+),0,0\), (?P<rate>\d+\.\d+)\]")
 
     # parse the JS-style date/rate feed
     rates = []
     for val in date_re.finditer(txt):
+        # JS dates use 0-indexed months, thus the `+ 1`
         parsed_time = datetime(int(val.group('y')), int(val.group('m')) + 1,
                                int(val.group('d')), int(val.group('h')))
         rates.append([parsed_time, float(val.group('rate')) * 10])
 
     return rates
 
-def fetch_rates():
+def fetch_rates(session):
     if len(sys.argv) > 1:
         day = date.fromisoformat(sys.argv[1])
-        rates_a = fetch_for_date(day - timedelta(days=1))
-        rates_b = fetch_for_date(day)
+        rates_a = fetch_for_date(session, day - timedelta(days=1))
+        rates_b = fetch_for_date(session, day)
     else:
         day = date.today()
-        rates_a = fetch_for_date(day)
-        rates_b = fetch_for_date(day + timedelta(days=1))
+        rates_a = fetch_for_date(session, day)
+        rates_b = fetch_for_date(session, day + timedelta(days=1))
 
     # TODO: hardcoded assumption we run this in the 5 PM hour
     cutoff = time.fromisoformat("18:00")
@@ -85,22 +88,23 @@ def find_optimal_window(rates):
 
     return start, end
 
-def update_charger(start, end):
+def update_charger(session, start, end):
     # pad window to make sure we don't start or end in wrong hour
     start += timedelta(minutes=2)
     end -= timedelta(minutes=2)
     params = {"json": 1, "rapi": f"$ST {start.hour} {start.minute} {end.hour} {end.minute}"}
     print(params)
-    request = session.get("http://openevse-xxxx/r", params=params)
+    request = session.get(RAPI_API_URL, params=params)
     print(request.text)
 
 def main():
-    rates = fetch_rates()
+    session = requests.Session()
+    rates = fetch_rates(session)
     start, end = find_optimal_window(rates)
     print(f"Time window: {start} {end}")
     # only update charger if we are querying today
     if len(sys.argv) == 1:
-        update_charger(start, end)
+        update_charger(session, start, end)
 
 
 if __name__ == '__main__':
