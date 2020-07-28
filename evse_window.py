@@ -21,13 +21,9 @@ ALLOW_CHARGE_PRICE = 1.6
 session = requests.Session()
 
 def fetch_for_date(when):
-    # curl 'https://hourlypricing.comed.com/rrtp/ServletFeed?type=daynexttomorrow'
     # curl 'https://hourlypricing.comed.com/rrtp/ServletFeed?type=daynexttoday&date=20200726'
     url = "https://hourlypricing.comed.com/rrtp/ServletFeed"
-    if when is None:
-        params = {"type": "daynexttomorrow"}
-    else:
-        params = {"type": "daynexttoday", "date": when.strftime("%Y%m%d")}
+    params = {"type": "daynexttoday", "date": when.strftime("%Y%m%d")}
     req = session.get(url, params=params)
     txt = req.text
 
@@ -50,8 +46,9 @@ def fetch_rates():
         rates_a = fetch_for_date(day - timedelta(days=1))
         rates_b = fetch_for_date(day)
     else:
-        rates_a = fetch_for_date(date.today())
-        rates_b = fetch_for_date(None)
+        day = date.today()
+        rates_a = fetch_for_date(day)
+        rates_b = fetch_for_date(day + timedelta(days=1))
 
     # TODO: hardcoded assumption we run this in the 5 PM hour
     cutoff = time.fromisoformat("18:00")
