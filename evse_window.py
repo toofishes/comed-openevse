@@ -1,25 +1,12 @@
 #!/usr/bin/env python3
 
+import argparse
 from datetime import date, datetime, time, timedelta
+import os
 import re
-import sys
 
 import requests
 
-
-# How many hours do we need to fully charge the car? Find the cheapest window
-# of time to accomidate this.
-CHARGE_HOURS = 4
-
-# What time in the morning should we not sleep before? This keeps the charger
-# out of sleep for things like car preheat and precool.
-AWAKE_UNTIL = time.fromisoformat("09:30")
-
-# What price to allow charging at regardless of how many hours we need?
-ALLOW_CHARGE_PRICE = 1.4
-
-# Full URL to your OpenEVSE RAPI API call
-RAPI_API_URL = "http://openevse-xxxx/r"
 
 def fetch_for_date(session, when):
     # curl 'https://hourlypricing.comed.com/rrtp/ServletFeed?type=daynexttoday&date=20200726'
@@ -39,19 +26,13 @@ def fetch_for_date(session, when):
         # JS dates use 0-indexed months, thus the `+ 1`
         parsed_time = datetime(int(val.group('y')), int(val.group('m')) + 1,
                                int(val.group('d')), int(val.group('h')))
-        rates.append([parsed_time, float(val.group('rate')) * 10])
+        rates.append([parsed_time, float(val.group('rate'))])
 
     return rates
 
-def fetch_rates(session):
-    if len(sys.argv) > 1:
-        day = date.fromisoformat(sys.argv[1])
-        rates_a = fetch_for_date(session, day - timedelta(days=1))
-        rates_b = fetch_for_date(session, day)
-    else:
-        day = date.today()
-        rates_a = fetch_for_date(session, day)
-        rates_b = fetch_for_date(session, day + timedelta(days=1))
+def fetch_rates(session, second_day):
+    rates_a = fetch_for_date(session, second_day - timedelta(days=1))
+    rates_b = fetch_for_date(session, second_day)
 
     # TODO: hardcoded assumption we run this in the 5 PM hour
     cutoff = time.fromisoformat("18:00")
@@ -61,50 +42,64 @@ def fetch_rates(session):
 
     return rates
 
-def find_optimal_window(rates):
+def find_optimal_window(rates, charge_hours, max_rate, awake_until):
     # sliding windows approach to minimizing cost; find the lowest cost
-    # window of CHARGE_HOURS length in the data set.
-    windows = [None] * (len(rates) - CHARGE_HOURS)
+    # window of the proper length in the data set.
+    windows = [None] * (len(rates) - charge_hours + 1)
     for i in range(len(windows)):
-        windows[i] = sum(r[1] for r in rates[i:i+CHARGE_HOURS])
+        # multiply rates by 10 to avoid floating point rounding errors
+        windows[i] = sum(r[1] * 10 for r in rates[i:i+charge_hours])
 
     start_idx = min(range(len(windows)), key=windows.__getitem__)
-    end_idx = start_idx + CHARGE_HOURS
+    end_idx = start_idx + charge_hours - 1
 
     # expand window for all nearby hours under our maximum cost
-    max_rate = ALLOW_CHARGE_PRICE * 10
-    while start_idx > 0 and rates[start_idx - 1][1] < max_rate:
-        start_idx -= 1
-    while end_idx < len(rates) - 1 and rates[end_idx + 1][1] < max_rate:
-        end_idx += 1
+    if max_rate is not None:
+        while start_idx > 0 and rates[start_idx - 1][1] < max_rate:
+            start_idx -= 1
+        while end_idx < len(rates) - 1 and rates[end_idx + 1][1] < max_rate:
+            end_idx += 1
 
     # rates are listed as "hour ending", so start time is 1 hour before
     start = rates[start_idx][0] - timedelta(hours=1)
-    end = rates[end_idx][0] - timedelta(hours=1)
+    end = rates[end_idx][0]
 
     # adjust if necessary for comfort
-    if end.time() < AWAKE_UNTIL:
-        end = datetime.combine(end.date(), AWAKE_UNTIL)
+    if awake_until is not None and end.time() < awake_until:
+        end = datetime.combine(end.date(), awake_until)
 
     return start, end
 
-def update_charger(session, start, end):
+def update_charger(session, url, start, end):
     # pad window to make sure we don't start or end in wrong hour
     start += timedelta(minutes=2)
     end -= timedelta(minutes=2)
     params = {"json": 1, "rapi": f"$ST {start.hour} {start.minute} {end.hour} {end.minute}"}
-    print(params)
-    request = session.get(RAPI_API_URL, params=params)
-    print(request.text)
+    response = session.get(url, params=params)
+    print("RAPI response:", response.text)
 
 def main():
+    parser = argparse.ArgumentParser(
+        description="Set OpenEVSE charge timer based on ComEd day ahead pricing")
+    parser.add_argument("--hours", type=int, default=4,
+                        help="find charge window of at this many hours (default: %(default)s)")
+    parser.add_argument("--awake-until", metavar='TIME', type=time.fromisoformat,
+                        help="regardless of charge window length, don't sleep until this time")
+    parser.add_argument("--charge-price", metavar='PRICE', type=float,
+                        help="¢/kWh price to allow charging outside our charge window")
+    parser.add_argument("--rapi-url", metavar='URL', default="http://openevse.local/r",
+                        help="full URL to make an RAPI API call (default: %(default)s)")
+    default_date = date.today() + timedelta(days=1)
+    parser.add_argument("--date", type=date.fromisoformat, default=default_date,
+                        help="date to use to find ideal window (default: tomorrow %(default)s)")
+    args = parser.parse_args()
+
     session = requests.Session()
-    rates = fetch_rates(session)
-    start, end = find_optimal_window(rates)
+    rates = fetch_rates(session, args.date)
+    start, end = find_optimal_window(rates, args.hours, args.charge_price, args.awake_until)
     print(f"Time window: {start} {end}")
-    # only update charger if we are querying today
-    if len(sys.argv) == 1:
-        update_charger(session, start, end)
+    if args.rapi_url:
+        update_charger(session, args.rapi_url, start, end)
 
 
 if __name__ == '__main__':
