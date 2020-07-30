@@ -70,11 +70,18 @@ def find_optimal_window(rates, charge_hours, max_rate, awake_until):
 
     return start, end
 
+def cmd_with_checksum(cmd):
+    cksum = 0
+    for c in cmd:
+        cksum ^= ord(c)
+    return f"{cmd}^{hex(cksum)[2:]}"
+
 def update_charger(session, url, start, end):
     # pad window to make sure we don't start or end in wrong hour
     start += timedelta(minutes=2)
     end -= timedelta(minutes=2)
-    params = {"json": 1, "rapi": f"$ST {start.hour} {start.minute} {end.hour} {end.minute}"}
+    cmd = f"$ST {start.hour} {start.minute} {end.hour} {end.minute}"
+    params = {"json": 1, "rapi": cmd_with_checksum(cmd)}
     response = session.get(url, params=params)
     print("RAPI response:", response.text)
 
