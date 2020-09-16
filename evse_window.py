@@ -43,14 +43,12 @@ def fetch_rates(session, second_day):
 
     return rates
 
-def find_optimal_window(rates, charge_hours, max_rate, awake_until):
+def find_optimal_window(rates, charge_hours, awake_until):
     """Calculate a start and end time to allow charging to occur. The first
     priority is ensuring we have the lowest possible cost window of at least
-    `charge_hours`. Next, we expand the window if `max_rate` is provided and
-    hours adjacent to the window are priced below this rate. Finally, we extend
-    the window's end time to `awake_until` if it was scheduled to end earlier.
-    This allows things like car preheat/precool to be able to draw power from
-    the EVSE."""
+    `charge_hours`. We then extend the window's end time to `awake_until` if it
+    was scheduled to end earlier. This allows things like car preheat/precool
+    to be able to draw power from the EVSE."""
     # sliding windows approach to minimizing cost; find the lowest cost
     # window of the proper length in the data set.
     windows = [None] * (len(rates) - charge_hours + 1)
@@ -61,25 +59,18 @@ def find_optimal_window(rates, charge_hours, max_rate, awake_until):
     start_idx = min(range(len(windows)), key=windows.__getitem__)
     end_idx = start_idx + charge_hours - 1
 
-    # expand window for all nearby hours under our maximum cost
-    if max_rate is not None:
-        while start_idx > 0 and rates[start_idx - 1][1] < max_rate:
-            start_idx -= 1
-        while end_idx < len(rates) - 1 and rates[end_idx + 1][1] < max_rate:
-            end_idx += 1
-
     # rates are listed as "hour ending", so start time is 1 hour before
     start = rates[start_idx][0] - timedelta(hours=1)
     end = rates[end_idx][0]
-
-    # adjust if necessary for comfort
-    if awake_until is not None and end.time() < awake_until:
-        end = datetime.combine(end.date(), awake_until)
 
     # pad window to make sure we don't start or end in wrong hour
     pad = timedelta(minutes=2)
     start += pad
     end -= pad
+
+    # adjust if necessary for staying awake until a given time
+    if awake_until is not None and end.time() < awake_until:
+        end = datetime.combine(end.date(), awake_until)
 
     return start, end
 
@@ -122,8 +113,6 @@ def main():
                         help="find charge window of at this many hours (default: %(default)s)")
     parser.add_argument("--awake-until", metavar='TIME', type=time.fromisoformat,
                         help="regardless of charge window length, don't sleep until this time")
-    parser.add_argument("--charge-price", metavar='PRICE', type=float,
-                        help="¢/kWh price to allow charging outside our charge window")
     parser.add_argument("--rapi-url", metavar='URL', default="http://openevse.local/r",
                         help="full URL to make an RAPI API call (default: %(default)s)")
     default_date = date.today() + timedelta(days=1)
@@ -133,7 +122,7 @@ def main():
 
     session = requests.Session()
     rates = fetch_rates(session, args.date)
-    start, end = find_optimal_window(rates, args.hours, args.charge_price, args.awake_until)
+    start, end = find_optimal_window(rates, args.hours, args.awake_until)
     print(f"Time window: {start} {end}")
     if args.rapi_url:
         rapi = RAPI(session, args.rapi_url)
