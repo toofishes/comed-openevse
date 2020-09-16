@@ -81,18 +81,28 @@ class RAPI:
         self.url = url
 
     @staticmethod
-    def cmd_with_checksum(cmd):
-        """Returns RAPI command with calculated appended checksum."""
+    def checksum(cmd):
+        """Returns calculated checksum for given RAPI command."""
         cksum = 0
         for char in cmd:
             cksum ^= ord(char)
-        return f"{cmd}^{hex(cksum)[2:]}"
+        return hex(cksum)[2:]
+
+    def cmd_with_checksum(self, cmd):
+        """Returns RAPI command with calculated appended checksum."""
+        checksum = self.checksum(cmd)
+        return f"{cmd}^{checksum}"
 
     def execute_cmd(self, cmd):
         """Executes an RAPI command and returns the parsed JSON response."""
         params = {"json": 1, "rapi": self.cmd_with_checksum(cmd)}
         response = self.session.get(self.url, params=params)
-        return response.json()
+        parsed = response.json()
+        ret = parsed['ret'].split('^')
+        expected_cksum = self.checksum(ret[0])
+        if ret[1] != expected_cksum:
+            raise Exception(f"mismatched checksum: expected {expected_cksum}, got {ret[1]}")
+        return parsed
 
     def set_schedule(self, start, end):
         """Set the delay timer schedule to the given start and end time."""
