@@ -26,7 +26,7 @@ def fetch_for_date(session, when):
         # JS dates use 0-indexed months, thus the `+ 1`
         parsed_time = datetime(int(val.group('y')), int(val.group('m')) + 1,
                                int(val.group('d')), int(val.group('h')))
-        rates.append([parsed_time, float(val.group('rate'))])
+        rates.append((parsed_time, float(val.group('rate'))))
 
     return rates
 
