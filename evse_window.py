@@ -12,8 +12,8 @@ def fetch_for_date(session, when):
     # curl 'https://hourlypricing.comed.com/rrtp/ServletFeed?type=daynexttoday&date=20200726'
     url = "https://hourlypricing.comed.com/rrtp/ServletFeed"
     params = {"type": "daynexttoday", "date": when.strftime("%Y%m%d")}
-    req = session.get(url, params=params)
-    txt = req.text
+    response = session.get(url, params=params)
+    txt = response.text
 
     # format: "[[Date.UTC(2020,6,18,0,0,0), 1.8], ...]"
     # note that they aren't UTC at all, they are America/Chicago TZ
