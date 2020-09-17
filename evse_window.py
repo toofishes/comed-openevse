@@ -3,11 +3,15 @@
 import argparse
 from datetime import date, datetime, time, timedelta
 import re
+from typing import Dict, List, Mapping, Tuple
 
 import requests
 
 
-def fetch_for_date(session, when):
+RatesType = List[Tuple[datetime, float]]
+StartEndType = Tuple[datetime, datetime]
+
+def fetch_for_date(session: requests.Session, when: date) -> RatesType:
     """Fetch the ComEd day-ahead hourly prices for the given date."""
     # curl 'https://hourlypricing.comed.com/rrtp/ServletFeed?type=daynexttoday&date=20200726'
     url = "https://hourlypricing.comed.com/rrtp/ServletFeed"
@@ -30,7 +34,7 @@ def fetch_for_date(session, when):
 
     return rates
 
-def fetch_rates(session, second_day):
+def fetch_rates(session: requests.Session, second_day: date) -> RatesType:
     """Fetch two days worth of rates and retain the values from 5 PM until 5 PM the second day."""
     rates_a = fetch_for_date(session, second_day - timedelta(days=1))
     rates_b = fetch_for_date(session, second_day)
@@ -43,7 +47,7 @@ def fetch_rates(session, second_day):
 
     return rates
 
-def find_optimal_window(rates, charge_hours, awake_until):
+def find_optimal_window(rates: RatesType, charge_hours: int, awake_until: time) -> StartEndType:
     """Calculate a start and end time to allow charging to occur. The first
     priority is ensuring we have the lowest possible cost window of at least
     `charge_hours`. We then extend the window's end time to `awake_until` if it
@@ -51,7 +55,7 @@ def find_optimal_window(rates, charge_hours, awake_until):
     to be able to draw power from the EVSE."""
     # sliding windows approach to minimizing cost; find the lowest cost
     # window of the proper length in the data set.
-    windows = [None] * (len(rates) - charge_hours + 1)
+    windows = [0.0] * (len(rates) - charge_hours + 1)
     for i in range(len(windows)):
         # multiply rates by 10 to avoid floating point rounding errors
         windows[i] = sum(r[1] * 10 for r in rates[i:i+charge_hours])
@@ -63,8 +67,8 @@ def find_optimal_window(rates, charge_hours, awake_until):
     start = rates[start_idx][0] - timedelta(hours=1)
     end = rates[end_idx][0]
 
-    # pad window to make sure we don't start or end in wrong hour
-    pad = timedelta(minutes=2)
+    # one minute padding to ensure we don't start or end in wrong hour
+    pad = timedelta(minutes=1)
     start += pad
     end -= pad
 
@@ -76,28 +80,28 @@ def find_optimal_window(rates, charge_hours, awake_until):
 
 class RAPI:
     """Communicate with OpenEVSE using RAPI over HTTP."""
-    def __init__(self, session, url):
+    def __init__(self, session: requests.Session, url: str):
         self.session = session
         self.url = url
 
     @staticmethod
-    def checksum(cmd):
+    def checksum(cmd: str) -> str:
         """Returns calculated checksum for given RAPI command."""
         cksum = 0
         for char in cmd:
             cksum ^= ord(char)
         return hex(cksum)[2:]
 
-    def cmd_with_checksum(self, cmd):
+    def cmd_with_checksum(self, cmd: str) -> str:
         """Returns RAPI command with calculated appended checksum."""
         checksum = self.checksum(cmd)
         return f"{cmd}^{checksum}"
 
-    def execute_cmd(self, cmd):
+    def execute_cmd(self, cmd: str) -> Mapping[str, str]:
         """Executes an RAPI command and returns the parsed JSON response."""
         params = {"json": 1, "rapi": self.cmd_with_checksum(cmd)}
         response = self.session.get(self.url, params=params)
-        parsed = response.json()
+        parsed: Dict[str, str] = response.json()
         ret = parsed['ret'].split('^')
         expected_cksum = self.checksum(ret[0])
         if ret[1] != expected_cksum:
@@ -106,7 +110,7 @@ class RAPI:
         parsed['ret_cksum'] = ret[1]
         return parsed
 
-    def set_schedule(self, start, end):
+    def set_schedule(self, start: datetime, end: datetime) -> None:
         """Set the delay timer schedule to the given start and end time."""
         response = self.execute_cmd("$GD")
         expected = f"$OK {start.hour} {start.minute} {end.hour} {end.minute}"
@@ -117,7 +121,7 @@ class RAPI:
             response = self.execute_cmd(cmd)
             print("RAPI response:", response)
 
-def main():
+def main() -> None:
     """Parse arguments, execute the scheduler, and update the charger."""
     parser = argparse.ArgumentParser(
         description="Set OpenEVSE charge timer based on ComEd day ahead pricing")
