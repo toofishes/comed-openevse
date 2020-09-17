@@ -102,13 +102,15 @@ class RAPI:
         expected_cksum = self.checksum(ret[0])
         if ret[1] != expected_cksum:
             raise Exception(f"mismatched checksum: expected {expected_cksum}, got {ret[1]}")
+        parsed['ret_value'] = ret[0]
+        parsed['ret_cksum'] = ret[1]
         return parsed
 
     def set_schedule(self, start, end):
         """Set the delay timer schedule to the given start and end time."""
         response = self.execute_cmd("$GD")
         expected = f"$OK {start.hour} {start.minute} {end.hour} {end.minute}"
-        if response['ret'].split('^')[0] == expected:
+        if response['ret_value'] == expected:
             print("Skipping schedule update, no change:", response)
         else:
             cmd = f"$ST {start.hour} {start.minute} {end.hour} {end.minute}"
