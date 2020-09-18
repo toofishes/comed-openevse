@@ -47,27 +47,39 @@ def fetch_rates(session: requests.Session, second_day: date) -> RatesType:
 
     return rates
 
-def find_optimal_window(rates: RatesType, charge_hours: int, awake_until: time) -> StartEndType:
+def convert_rates(rates: RatesType) -> RatesType:
+    """Converts 'hour ending' rates as returned by the hourly pricing API into
+    a per-minute timeset with the expected rate for each particular minute."""
+    new_rates: RatesType = []
+    for end_hour, price in rates:
+        start_hour = end_hour - timedelta(hours=1)
+        new_rates.extend([(start_hour + timedelta(minutes=offset), price) for offset in range(60)])
+
+    return new_rates
+
+def find_optimal_window(rates: RatesType, charge_hours: float, awake_until: time) -> StartEndType:
     """Calculate a start and end time to allow charging to occur. The first
     priority is ensuring we have the lowest possible cost window of at least
     `charge_hours`. We then extend the window's end time to `awake_until` if it
     was scheduled to end earlier. This allows things like car preheat/precool
     to be able to draw power from the EVSE."""
+    charge_minutes = round(charge_hours * 60)
+    rates = convert_rates(rates)
     # sliding windows approach to minimizing cost; find the lowest cost
     # window of the proper length in the data set.
-    windows = [0.0] * (len(rates) - charge_hours + 1)
+    windows = [0.0] * (len(rates) - charge_minutes + 1)
     for i in range(len(windows)):
         # multiply rates by 10 to avoid floating point rounding errors
-        windows[i] = sum(r[1] * 10 for r in rates[i:i+charge_hours])
+        windows[i] = sum(r[1] * 10 for r in rates[i:i+charge_minutes])
 
     start_idx = min(range(len(windows)), key=windows.__getitem__)
-    end_idx = start_idx + charge_hours - 1
+    end_idx = start_idx + charge_minutes
 
-    # rates are listed as "hour ending", so start time is 1 hour before
-    start = rates[start_idx][0] - timedelta(hours=1)
+    start = rates[start_idx][0]
     end = rates[end_idx][0]
 
     # one minute padding to ensure we don't start or end in wrong hour
+    # if EVSE and electric meter clocks do not exactly match up
     pad = timedelta(minutes=1)
     start += pad
     end -= pad
@@ -125,7 +137,7 @@ def main() -> None:
     """Parse arguments, execute the scheduler, and update the charger."""
     parser = argparse.ArgumentParser(
         description="Set OpenEVSE charge timer based on ComEd day ahead pricing")
-    parser.add_argument("--hours", type=int, default=4,
+    parser.add_argument("--hours", type=float, default=4,
                         help="find charge window of at this many hours (default: %(default)s)")
     parser.add_argument("--awake-until", metavar='TIME', type=time.fromisoformat,
                         help="regardless of charge window length, don't sleep until this time")
