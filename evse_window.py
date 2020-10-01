@@ -102,7 +102,7 @@ class RAPI:
         cksum = 0
         for char in cmd:
             cksum ^= ord(char)
-        return hex(cksum)[2:]
+        return hex(cksum)[2:].upper()
 
     def cmd_with_checksum(self, cmd: str) -> str:
         """Returns RAPI command with calculated appended checksum."""
