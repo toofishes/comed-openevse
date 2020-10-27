@@ -17,7 +17,10 @@ def fetch_for_date(session: requests.Session, when: date) -> RatesType:
     url = "https://hourlypricing.comed.com/rrtp/ServletFeed"
     params = {"type": "daynexttoday", "date": when.strftime("%Y%m%d")}
     response = session.get(url, params=params)
+    response.raise_for_status()
     txt = response.text
+    if len(txt) == 0:
+        raise Exception("empty prices response")
 
     # format: "[[Date.UTC(2020,6,18,0,0,0), 1.8], ...]"
     # note that they aren't UTC at all, they are America/Chicago TZ
@@ -113,6 +116,7 @@ class RAPI:
         """Executes an RAPI command and returns the parsed JSON response."""
         params = {"json": 1, "rapi": self.cmd_with_checksum(cmd)}
         response = self.session.get(self.url, params=params)
+        response.raise_for_status()
         parsed: Dict[str, str] = response.json()
         ret = parsed['ret'].split('^')
         expected_cksum = self.checksum(ret[0])
